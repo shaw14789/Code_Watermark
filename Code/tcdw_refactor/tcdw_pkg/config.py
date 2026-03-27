@@ -7,8 +7,8 @@ import torch
 class TCDWConfig:
     # paths
     gen_model_path: str = "/share/sda1/FX+ZK/Code-fx/Watermark/WaterMark/Model/meditron-7b"
-    nli_path: str = "/share/sda1/FX+ZK/Code-fx/Watermark/WaterMark/0320/nli_model_offline"
-    pqa_data_path: str = "/share/sda1/FX+ZK/Code-fx/Watermark/WaterMark/0317/Dataset/PubMedQA/pqa_labeled"
+    nli_path: str = "/share/sda1/FX+ZK/Code-fx/Watermark/WaterMark/Model/nli_model"
+    pqa_data_path: str = "/share/sda1/FX+ZK/Code-fx/Watermark/WaterMark/dataset/PubMedQA/pqa_labeled"
     output_csv: str = "tcdw_unified_results.csv"
 
     # experiment mode
