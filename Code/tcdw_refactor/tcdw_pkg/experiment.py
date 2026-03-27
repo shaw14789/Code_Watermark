@@ -422,10 +422,10 @@ def run_batch_experiment(cfg: TCDWConfig):
 
 def run_all_ablation_with_seeds():
 
-    # modes = ["no_wm", "wm_only", "wm_span"]
-    # seeds = [1, 2, 3]
-    modes = [ "wm_span"]
-    seeds = [1]
+    modes = ["no_wm", "wm_only", "wm_span"]
+    seeds = [1, 2, 3]
+    # modes = [ "wm_span"]
+    # seeds = [1]
 
     for seed in seeds:
         for mode in modes:
