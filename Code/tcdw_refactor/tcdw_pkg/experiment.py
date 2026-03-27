@@ -20,6 +20,66 @@ from .claim_extractor import extract_must_have_claims
 from .claim_scorer import score_must_have_claims
 from .processor import TCDWMedicalLogitsProcessor
 
+import re
+
+
+def normalize_decision_text(text: str) -> str:
+    text = text.strip().lower()
+    if text in {"yes", "no", "maybe"}:
+        return text
+    return ""
+
+
+def extract_decision_from_text(generated_text: str) -> str:
+    """
+    从模型输出里提取 yes / no / maybe
+    优先解析：
+    Decision: yes
+    这种格式；如果没有，再退化到看首句/首词。
+    """
+    if not isinstance(generated_text, str):
+        return ""
+
+    text = generated_text.strip().lower()
+
+    # 1. 优先匹配明确格式：Decision: xxx
+    m = re.search(r"decision\s*:\s*(yes|no|maybe)\b", text)
+    if m:
+        return m.group(1)
+
+    # 2. 匹配开头直接是 yes/no/maybe
+    m = re.match(r"^(yes|no|maybe)\b", text)
+    if m:
+        return m.group(1)
+
+    # 3. 匹配第一句里是否包含明确 decision
+    first_sent = re.split(r'(?<=[.!?])\s+', text)[0]
+    m = re.search(r"\b(yes|no|maybe)\b", first_sent)
+    if m:
+        return m.group(1)
+
+    return ""
+def compute_decision_accuracy(pred_decision: str, gold_decision: str) -> float:
+    pred = normalize_decision_text(pred_decision)
+    gold = normalize_decision_text(str(gold_decision))
+    if pred == "" or gold == "":
+        return 0.0
+    return 1.0 if pred == gold else 0.0
+
+def extract_evidence_from_text(generated_text: str) -> str:
+    if not isinstance(generated_text, str):
+        return ""
+
+    text = generated_text.strip()
+
+    m = re.search(r"Evidence\s*:\s*(.*)", text, flags=re.IGNORECASE | re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # 如果没写 Evidence:，就去掉开头的 yes/no/maybe/Decision
+    text = re.sub(r"^\s*decision\s*:\s*(yes|no|maybe)\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(yes|no|maybe)\b[\s\.\:,-]*", "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 class UnifiedMedicalExperiment:
     def __init__(self, cfg: TCDWConfig):
@@ -102,7 +162,7 @@ class UnifiedMedicalExperiment:
         return entail_score, contra_score, neutral_score
 
     @torch.no_grad()
-    def generate_one(self, question: str, ref_fact: str) -> Dict[str, Any]:
+    def generate_one(self, question: str, ref_fact: str, gold_decision: str) -> Dict[str, Any]:
         # =========================
         # 1. 构造 prompt / 编码
         # =========================
@@ -213,6 +273,9 @@ class UnifiedMedicalExperiment:
         # =========================
         gen_ids = output_ids[0, prompt_len:]
         gen_text = self.gen_tokenizer.decode(gen_ids, skip_special_tokens=True)
+        pred_decision = extract_decision_from_text(gen_text)
+        decision_accuracy = compute_decision_accuracy(pred_decision, gold_decision)
+        evidence_text = extract_evidence_from_text(gen_text)
 
         # =========================
         # 6. Z-score
@@ -229,14 +292,14 @@ class UnifiedMedicalExperiment:
         # =========================
         # 7. 整体 NLI
         # =========================
-        entail_score, contra_score, neutral_score = self.audit_semantic(ref_fact, gen_text)
+        entail_score, contra_score, neutral_score = self.audit_semantic(ref_fact, evidence_text)
 
         # =========================
         # 8. Claim-level 评估
         # =========================
         claim_eval = score_must_have_claims(
             must_have_claims=must_have_claims,
-            generated_text=gen_text,
+            generated_text=evidence_text,
             audit_fn=self.audit_semantic,
             entail_threshold=0.50,
             contra_threshold=0.50,
@@ -285,6 +348,11 @@ class UnifiedMedicalExperiment:
             "num_completed_anchor_spans": span_diag["num_completed_anchor_spans"],
             "num_anchor_token_seqs": span_diag["num_anchor_token_seqs"],
             "avg_anchor_seq_len": span_diag["avg_anchor_seq_len"],
+            # decision
+            "gold_decision": gold_decision,
+            "pred_decision": pred_decision,
+            "decision_accuracy": decision_accuracy,      
+            "evidence_text": evidence_text,    
         }
 
 
@@ -298,8 +366,13 @@ def run_batch_experiment(cfg: TCDWConfig):
     for idx in tqdm(range(total_num)):
         try:
             item = dataset[idx]
-            question, ref_fact = normalize_pubmedqa_item(item)
-            result = exp.generate_one(question, ref_fact)
+            # question, ref_fact = normalize_pubmedqa_item(item)
+            question, ref_fact, gold_decision = normalize_pubmedqa_item(item)
+            result = exp.generate_one(
+                question, 
+                ref_fact,
+                gold_decision,
+            )
             row = {
                 "id": idx,
                 "question": question,
@@ -345,6 +418,10 @@ def run_batch_experiment(cfg: TCDWConfig):
                 "num_completed_anchor_spans": result["num_completed_anchor_spans"],
                 "num_anchor_token_seqs": result["num_anchor_token_seqs"],
                 "avg_anchor_seq_len": round(result["avg_anchor_seq_len"], 6),
+
+                "gold_decision": "",
+                "pred_decision": "",
+                "decision_accuracy": 0.0,
             }
             results.append(row)
         except Exception as e:
@@ -395,6 +472,9 @@ def run_batch_experiment(cfg: TCDWConfig):
                 "num_anchor_token_seqs": 0,
                 "avg_anchor_seq_len": 0.0,
                 "error": str(e),
+                "gold_decision": "",
+                "pred_decision": "",
+                "decision_accuracy": 0.0,
             })
 
     df = pd.DataFrame(results)
@@ -418,14 +498,16 @@ def run_batch_experiment(cfg: TCDWConfig):
         print(f">>> 平均 num_completed_anchor_spans: {valid_df['num_completed_anchor_spans'].mean():.4f}")
         print(f">>> 平均 avg_anchor_seq_len: {valid_df['avg_anchor_seq_len'].mean():.4f}")
         print(f">>> 平均 avg_next_token_candidates: {valid_df['avg_next_token_candidates'].mean():.4f}")
+        if "decision_accuracy" in valid_df.columns:
+            print(f">>> 平均 decision_accuracy: {valid_df['decision_accuracy'].mean():.4f}")
 
 
 def run_all_ablation_with_seeds():
 
     modes = ["no_wm", "wm_only", "wm_span"]
-    seeds = [1, 2, 3]
+    # seeds = [1, 2, 3]
     # modes = [ "wm_span"]
-    # seeds = [1]
+    seeds = [1]
 
     for seed in seeds:
         for mode in modes:
