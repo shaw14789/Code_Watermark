@@ -15,7 +15,7 @@ import spacy
 
 from .config import TCDWConfig
 from .data_utils import set_global_seed, smart_load_medical_data, normalize_pubmedqa_item, detect_z_from_token_ids
-from .anchor_extractor import NaturalAnchorExtractor
+from .anchor_extractor import PubMedQAAnchorExtractor
 from .claim_extractor import extract_must_have_claims
 from .claim_scorer import score_must_have_claims
 from .processor import TCDWMedicalLogitsProcessor
@@ -45,7 +45,7 @@ class UnifiedMedicalExperiment:
 
         print(f">>> 初始化 scispaCy: {cfg.scispacy_model}")
         self.nlp = spacy.load(cfg.scispacy_model)
-        self.anchor_extractor = NaturalAnchorExtractor(self.gen_tokenizer)
+        self.anchor_extractor = PubMedQAAnchorExtractor(self.gen_tokenizer)
 
         self.label2id = {str(v).lower(): int(k) for k, v in self.nli_model.config.id2label.items()}
         self.entail_label_id = self._find_label_id(["entailment", "entails"])
@@ -103,15 +103,24 @@ class UnifiedMedicalExperiment:
 
     @torch.no_grad()
     def generate_one(self, question: str, ref_fact: str) -> Dict[str, Any]:
+        # =========================
+        # 1. 构造 prompt / 编码
+        # =========================
         prompt = self.build_prompt(question, ref_fact)
         input_ids = self.encode_prompt(prompt)
         prompt_len = input_ids.size(1)
+
         mode = self.cfg.experiment_mode
 
-        # 评估层：claim 用于后验评估，不再直接转成生成 anchor
+        # =========================
+        # 2. 评估层：先提取 Must-Have claims
+        #    注意：claim 只用于评估，不再作为生成 anchor
+        # =========================
         must_have_claims = extract_must_have_claims(ref_fact, self.nlp)
 
-        # 生成层：只用自然短片段作为 anchor
+        # =========================
+        # 3. 生成层：只从 ref_fact 中抽自然短片段作为 anchor
+        # =========================
         anchor_texts = self.anchor_extractor.extract_anchor_texts(ref_fact)
         anchor_token_seqs = self.anchor_extractor.anchor_texts_to_token_seqs(anchor_texts)
 
@@ -125,15 +134,25 @@ class UnifiedMedicalExperiment:
             start_boost = 0.0
             continue_boost = 0.0
             finish_boost = 0.0
+
         elif mode == "wm_only":
+            watermark_bias = self.cfg.watermark_bias
             start_boost = 0.0
             continue_boost = 0.0
             finish_boost = 0.0
+
         elif mode == "wm_span":
-            pass
+            watermark_bias = self.cfg.watermark_bias
+            start_boost = self.cfg.anchor_start_boost
+            continue_boost = self.cfg.anchor_continue_boost
+            finish_boost = self.cfg.anchor_finish_boost
+
         else:
             raise ValueError(f"Unknown experiment_mode: {mode}")
 
+        # =========================
+        # 4. 生成
+        # =========================
         if mode == "no_wm":
             output_ids = self.gen_model.generate(
                 input_ids=input_ids,
@@ -144,6 +163,7 @@ class UnifiedMedicalExperiment:
                 pad_token_id=self.gen_tokenizer.pad_token_id,
                 eos_token_id=self.gen_tokenizer.eos_token_id,
             )
+
             span_diag = {
                 "num_steps": 0,
                 "num_span_boost_steps": 0,
@@ -160,6 +180,7 @@ class UnifiedMedicalExperiment:
                     if len(anchor_token_seqs) > 0 else 0.0
                 ),
             }
+
         else:
             processor = TCDWMedicalLogitsProcessor(
                 gamma=self.cfg.gamma,
@@ -171,7 +192,9 @@ class UnifiedMedicalExperiment:
                 finish_boost=finish_boost,
                 prompt_length=prompt_len,
             )
+
             logits_processor = LogitsProcessorList([processor])
+
             output_ids = self.gen_model.generate(
                 input_ids=input_ids,
                 max_new_tokens=self.cfg.max_new_tokens,
@@ -182,11 +205,18 @@ class UnifiedMedicalExperiment:
                 pad_token_id=self.gen_tokenizer.pad_token_id,
                 eos_token_id=self.gen_tokenizer.eos_token_id,
             )
+
             span_diag = processor.get_diagnostics()
 
+        # =========================
+        # 5. 解码
+        # =========================
         gen_ids = output_ids[0, prompt_len:]
         gen_text = self.gen_tokenizer.decode(gen_ids, skip_special_tokens=True)
 
+        # =========================
+        # 6. Z-score
+        # =========================
         z_info = detect_z_from_token_ids(
             prompt_ids=input_ids[0].tolist(),
             generated_ids=gen_ids.tolist(),
@@ -195,26 +225,55 @@ class UnifiedMedicalExperiment:
             seed_offset=self.cfg.seed_offset,
             device=self.device,
         )
-        entail_score, contra_score, neutral_score = self.audit_semantic(ref_fact, gen_text)
-        claim_eval = score_must_have_claims(must_have_claims, gen_text, self.audit_semantic, 0.50, 0.50)
 
+        # =========================
+        # 7. 整体 NLI
+        # =========================
+        entail_score, contra_score, neutral_score = self.audit_semantic(ref_fact, gen_text)
+
+        # =========================
+        # 8. Claim-level 评估
+        # =========================
+        claim_eval = score_must_have_claims(
+            must_have_claims=must_have_claims,
+            generated_text=gen_text,
+            audit_fn=self.audit_semantic,
+            entail_threshold=0.50,
+            contra_threshold=0.50,
+        )
+
+        # =========================
+        # 9. 返回结果
+        # =========================
         return {
             "prompt": prompt,
             "prompt_token_ids": input_ids[0].tolist(),
             "generated_token_ids": gen_ids.tolist(),
             "text": gen_text,
             "num_generated_tokens": len(gen_ids),
+
+            # 评估层
             "must_have_claims": must_have_claims,
+
+            # 生成层 anchors
             "anchor_texts": anchor_texts,
             "anchor_token_seqs": anchor_token_seqs,
+
+            # semantic metrics
             "entail_score": entail_score,
             "contra_score": contra_score,
             "neutral_score": neutral_score,
+
+            # z-score
             **z_info,
+
+            # claim-level
             "claim_support_score": claim_eval["support_score"],
             "claim_contradiction_score": claim_eval["contradiction_score"],
             "claim_missing_score": claim_eval["missing_score"],
             "claim_results": claim_eval["claim_results"],
+
+            # span-aware diagnostics
             "num_span_steps": span_diag["num_steps"],
             "num_span_boost_steps": span_diag["num_span_boost_steps"],
             "num_empty_boost_steps": span_diag["num_empty_boost_steps"],
