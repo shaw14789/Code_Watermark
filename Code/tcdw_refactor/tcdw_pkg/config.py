@@ -34,7 +34,9 @@ class TCDWConfig:
     prompt_template: str = (
         "Question: {question}\n"
         "Context: {context}\n"
-        "Answer in one concise sentence strictly supported by the context: "
+        "Answer in the following format:\n"
+        "Decision: yes, no, or maybe\n"
+        "Evidence: one short sentence strictly supported by the context.\n"
     )
     force_bos_token_id: Optional[int] = 1
 
