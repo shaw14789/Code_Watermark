@@ -1,0 +1,14 @@
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+
+# 忽略实验产生的大型权重文件或模型
+*.pth
+*.bin
+*.model
+checkpoint/
+
+# 忽略日志和临时文件
+*.log
+.vscode/
+.idea/
