@@ -42,8 +42,9 @@ def smart_load_medical_data(path: str):
     raise FileNotFoundError(f"目录 {path} 下未找到可识别的数据文件")
 
 
-def normalize_pubmedqa_item(item: Dict[str, Any]) -> Tuple[str, str]:
+def normalize_pubmedqa_item(item: Dict[str, Any]):
     question = item.get("question", "")
+
     context = (
         item.get("long_answer", None)
         or item.get("context", None)
@@ -51,6 +52,8 @@ def normalize_pubmedqa_item(item: Dict[str, Any]) -> Tuple[str, str]:
         or item.get("answer", None)
         or ""
     )
+
+    gold_decision = item.get("final_decision", "")
 
     if isinstance(context, list):
         context = " ".join([str(x) for x in context])
@@ -61,8 +64,10 @@ def normalize_pubmedqa_item(item: Dict[str, Any]) -> Tuple[str, str]:
         question = str(question)
     if not isinstance(context, str):
         context = str(context)
+    if not isinstance(gold_decision, str):
+        gold_decision = str(gold_decision)
 
-    return question, context
+    return question, context, gold_decision
 
 
 def _green_list_from_prev(
