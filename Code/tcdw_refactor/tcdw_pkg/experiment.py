@@ -362,13 +362,17 @@ def run_batch_experiment(cfg: TCDWConfig):
 
 
 def run_all_ablation_with_seeds():
-    modes = ["no_wm", "wm_only", "wm_span"]
-    seeds = [1, 2, 3]
+
+    # modes = ["no_wm", "wm_only", "wm_span"]
+    # seeds = [1, 2, 3]
+    modes = [ "wm_span"]
+    seeds = [1]
+
     for seed in seeds:
         for mode in modes:
             print(f"\n===== Running mode: {mode}, seed: {seed} =====")
             cfg = TCDWConfig(
-                num_samples=100,
+                num_samples=20,
                 experiment_mode=mode,
                 random_seed=seed,
                 output_csv=f"tcdw_{mode}_seed{seed}_results.csv",
