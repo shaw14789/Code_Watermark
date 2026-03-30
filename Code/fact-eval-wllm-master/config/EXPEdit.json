@@ -1,0 +1,1 @@
+{"algorithm_name": "EXPEdit", "pseudo_length": 256, "sequence_length": 200, "n_runs": 100, "key": 42, "p_threshold": 0.2, "top_k": 0, "gamma": 0.5, "delta": 2, "entropy_threshold": 0.9, "entropy": 0.9, "nlength": 256, "alpha": 0.45}

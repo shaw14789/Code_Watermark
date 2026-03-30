@@ -1,0 +1,1 @@
+{"algorithm_name": "SWEET", "gamma": 0.5, "delta": 2, "hash_key": 15485863, "z_threshold": 4.0, "prefix_length": 1, "entropy_threshold": 0.9, "pseudo_length": 256, "entropy": 0.9, "alpha": 0.45}
