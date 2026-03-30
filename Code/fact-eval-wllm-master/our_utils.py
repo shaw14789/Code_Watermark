@@ -20,9 +20,9 @@ from evaluation.pipelines.detection import (WatermarkedTextDetectionPipeline,
 
 # Global constants for paths
 MODEL_PATHS = {
-    "opt": "facebook/opt-1.3b",
-    "llama": "meta-llama/Llama-2-7b-hf",
-    "meditron": "epfl-llm/meditron-7b",
+    "opt": "/share/sda1/FX+ZK/Code-fx/Watermark/WaterMark/Model/opt-1.3b",
+    "llama": "/share/sda1/FX+ZK/Code-fx/REEF/model/llama_models/Llama-2-7b-hf",
+    "meditron": "/share/sda1/FX+ZK/Code-fx/Watermark/WaterMark/Model/meditron-7b",
     "jsl":"johnsnowlabs/JSL-MedLlama-3-8B-v2.0",
     "biomistral":"BioMistral/BioMistral-7B"
 }
